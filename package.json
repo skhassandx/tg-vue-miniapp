@@ -1,0 +1,24 @@
+{
+  "name": "tg-vue3-pinia-miniapp",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "cf:dev": "wrangler pages dev dist --d1=DB --local",
+    "db:init:local": "wrangler d1 execute tg-miniapp-db --local --file=./schema.sql",
+    "db:init:remote": "wrangler d1 execute tg-miniapp-db --remote --file=./schema.sql"
+  },
+  "dependencies": {
+    "pinia": "^2.3.1",
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.11",
+    "wrangler": "^3.99.0"
+  }
+}
