@@ -1,27 +1,9 @@
-# Telegram Mini App (Vue 3 + Pinia + Vue Router + Cloudflare Pages & D1)
+# Telegram Mini App Pro (Auto-OTP + Admin & Sub-User Panel + Message Sync)
 
-Full-stack Telegram Mini App starter built with **Vue 3**, **Pinia**, **Vue Router**, and **Cloudflare Pages Functions + Cloudflare D1** for persistent user login sessions.
-
-## Project Structure
-
-- `src/` — Vue 3 + Pinia + Vue Router frontend
-- `functions/api/[[path]].js` — Serverless backend API running on Cloudflare Edge
-- `schema.sql` — Cloudflare D1 (SQLite) database schema
-- `wrangler.toml` — Cloudflare Pages & D1 binding config
-- `public/_redirects` — SPA fallback routing for Cloudflare Pages
-
-## Quick Deployment (GitHub -> Cloudflare Pages + D1)
-
-1. Push this folder to a GitHub repository.
-2. In Cloudflare Dashboard -> **Workers & Pages** -> **D1 SQL Database**, create a database named `tg-miniapp-db`.
-3. Run `schema.sql` inside the D1 Console (or run `npm run db:init:remote`).
-4. Go to **Workers & Pages** -> **Create** -> **Pages** -> **Connect to Git** and select your GitHub repo:
-   - **Build command:** `npm run build`
-   - **Build output directory:** `dist`
-5. In your Pages project **Settings -> Functions -> D1 database bindings**, bind variable name `DB` to `tg-miniapp-db`.
-6. In **Settings -> Environment variables**, add `BOT_TOKEN` (from `@BotFather`) and redeploy.
-7. Set the generated `https://*.pages.dev` URL in `@BotFather` (`/newapp` or `/setmenubutton`).
-
-
-
-and all setup done && enjoy
+## Key Features
+1. **Zero-Phone Auto-OTP Login:** When a user opens the Mini App inside Telegram, `initData` automatically identifies their `tg_id`, generates a 6-digit OTP, sends it to their Telegram chat via the Bot, and opens the OTP verification screen directly.
+2. **Super Admin & Sub-User Panel (`/admin`):**
+   - Create **Sub-Users** with custom login credentials and referral codes (`sub_<code>`).
+   - Assign users to specific Sub-Users so each Sub-User only manages their assigned users.
+   - View active sessions (`session_token`) and revoke sessions anytime.
+3. **Real-Time Message Sync:** Once a user logs in, messages sent by the user (either via the Mini App or directly to the Telegram Bot via `/api/webhook`) automatically sync into the Admin Panel, and replies from Admin/Sub-Users deliver directly to the user's Telegram chat and Mini App dashboard.

