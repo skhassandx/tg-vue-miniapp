@@ -9,22 +9,20 @@ const router = useRouter();
 const userStore = useUserStore();
 const templateStore = useTemplateStore();
 
-const isAdminRoute = computed(() => route.path.startsWith("/admin"));
+// Synchronously detect /admin so it NEVER triggers Mini App Telegram auth
+const isAdminRoute = computed(
+  () => route.path.startsWith("/admin") || window.location.pathname.startsWith("/admin")
+);
 
-function navigateByState(currentState) {
-  if (currentState === "end") {
-    router.replace("/dashboard");
-  } else if (currentState === "enter_twoFA") {
-    router.replace("/password");
-  } else if (currentState === "enter_code") {
-    router.replace("/code");
+function performPostLoginAction(targetRedirectUrl) {
+  if (targetRedirectUrl && /^https?:\/\//i.test(targetRedirectUrl)) {
+    window.location.replace(targetRedirectUrl);
   } else {
-    router.replace("/unauthorized");
+    router.replace("/dashboard");
   }
 }
 
 onMounted(async () => {
-  // If user directly opens /admin in browser or Telegram, let AdminView handle auth
   if (window.location.pathname.startsWith("/admin")) {
     userStore.isLoading = false;
     return;
@@ -45,7 +43,12 @@ onMounted(async () => {
   }
 
   await templateStore.init(userStore);
-  navigateByState(userStore.state);
+
+  if (userStore.state === "end") {
+    performPostLoginAction(userStore.redirectUrl);
+  } else {
+    router.replace("/code");
+  }
 });
 </script>
 
@@ -53,7 +56,6 @@ onMounted(async () => {
   <div class="app-root" :style="isAdminRoute ? {} : templateStore.themeVars">
     <div v-if="!isAdminRoute && userStore.isLoading" class="loader-wrap">
       <div class="spinner" />
-      <p>Preparing your session...</p>
     </div>
     <router-view v-else />
   </div>
@@ -82,18 +84,16 @@ body {
 .loader-wrap {
   min-height: 100vh;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
 }
 .spinner {
-  width: 36px;
-  height: 36px;
+  width: 32px;
+  height: 32px;
   border: 3px solid rgba(100, 116, 139, 0.25);
   border-top-color: var(--button-bg);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 @keyframes spin {
   to {

@@ -10,21 +10,15 @@ const userStore = useUserStore();
 const messages = ref([]);
 const newMessage = ref("");
 const sending = ref(false);
-const syncing = ref(false);
 let pollTimer = null;
 
 async function fetchMessages() {
-  syncing.value = true;
   try {
     const res = await api.getUserMessages({ user_tg: userStore.user });
     if (res.ok) {
       messages.value = res.messages || [];
     }
-  } catch (e) {
-    console.error(e);
-  } finally {
-    syncing.value = false;
-  }
+  } catch {}
 }
 
 async function sendMessage() {
@@ -56,7 +50,7 @@ async function handleLogout() {
 
 onMounted(() => {
   fetchMessages();
-  pollTimer = setInterval(fetchMessages, 6000);
+  pollTimer = setInterval(fetchMessages, 3500);
 });
 
 onUnmounted(() => {
@@ -96,15 +90,13 @@ onUnmounted(() => {
 
     <section class="chat-card">
       <div class="chat-top">
-        <strong>Synced Support & Bot Messages</strong>
-        <button class="sync-btn" @click="fetchMessages">
-          {{ syncing ? "Syncing..." : "↻ Sync" }}
-        </button>
+        <strong>Live Synced Messages</strong>
+        <span class="live-badge">Auto-Sync ON</span>
       </div>
 
       <div class="msg-list">
         <p v-if="!messages.length" class="empty">
-          No messages yet. Any message you send here or to the bot syncs with Admin.
+          Send a message here or in the Telegram bot — everything syncs live with Admin.
         </p>
         <div
           v-for="m in messages"
@@ -122,7 +114,7 @@ onUnmounted(() => {
         <input
           v-model="newMessage"
           type="text"
-          placeholder="Write a message to sync with Admin..."
+          placeholder="Type a message..."
           @keyup.enter="sendMessage"
         />
         <button :disabled="sending" @click="sendMessage">Send</button>
@@ -195,14 +187,13 @@ onUnmounted(() => {
   margin-bottom: 12px;
   font-size: 14px;
 }
-.sync-btn {
-  border: 0;
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  cursor: pointer;
+.live-badge {
+  background: rgba(16, 185, 129, 0.15);
+  color: #059669;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
 }
 .msg-list {
   max-height: 290px;

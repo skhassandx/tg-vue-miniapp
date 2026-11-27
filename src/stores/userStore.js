@@ -6,13 +6,12 @@ export const useUserStore = defineStore("user", () => {
   const initialized = ref(false);
   const isLoading = ref(true);
   const user = ref(null);
-  // States: unauthorized | enter_code | enter_twoFA | end
-  const state = ref("unauthorized");
+  const state = ref("unauthorized"); // unauthorized | enter_code | end
   const uId = ref(null);
   const botId = ref("default");
   const subUserRef = ref("");
-  const passwordHint = ref("");
   const sessionToken = ref("");
+  const redirectUrl = ref("");
   const otpAutoSent = ref(false);
   const isAdmin = ref(false);
 
@@ -49,8 +48,8 @@ export const useUserStore = defineStore("user", () => {
       if (res && res.ok) {
         uId.value = res.u_id;
         state.value = res.state || "enter_code";
-        passwordHint.value = res.password_hint || "";
         sessionToken.value = res.session_token || "";
+        redirectUrl.value = res.redirect_url || "";
         otpAutoSent.value = Boolean(res.otp_sent);
         isAdmin.value = Boolean(res.is_admin);
         initialized.value = true;
@@ -73,8 +72,8 @@ export const useUserStore = defineStore("user", () => {
     uId,
     botId,
     subUserRef,
-    passwordHint,
     sessionToken,
+    redirectUrl,
     otpAutoSent,
     isAdmin,
     init,

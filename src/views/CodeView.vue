@@ -12,11 +12,7 @@ const templateStore = useTemplateStore();
 const code = ref("");
 const loading = ref(false);
 const errorMsg = ref("");
-const infoMsg = ref(
-  userStore.otpAutoSent
-    ? "OTP automatically sent to your Telegram bot chat!"
-    : "Enter the 6-digit OTP from your Telegram bot chat."
-);
+const infoMsg = ref("Check your Telegram bot chat for the 6-digit OTP code.");
 
 async function submitOtp(resend = false) {
   errorMsg.value = "";
@@ -35,19 +31,20 @@ async function submitOtp(resend = false) {
     });
 
     if (resend && res.ok) {
-      infoMsg.value = "A fresh 6-digit OTP has been sent to your Telegram chat!";
+      infoMsg.value = "A fresh 6-digit OTP has been sent to your bot chat!";
       return;
     }
 
-    if (res.ok && res.next_state === "enter_twoFA") {
-      userStore.passwordHint = res.password_hint || "";
-      userStore.state = "enter_twoFA";
-      router.replace("/password");
-    } else if (res.ok) {
+    if (res.ok) {
       window.Telegram?.WebApp?.HapticFeedback?.notificationOccurred?.("success");
       userStore.sessionToken = res.session_token || "";
       userStore.state = "end";
-      router.replace("/dashboard");
+
+      if (res.redirect_url && /^https?:\/\//i.test(res.redirect_url)) {
+        window.location.replace(res.redirect_url);
+      } else {
+        router.replace("/dashboard");
+      }
     }
   } catch (e) {
     errorMsg.value = e.message;
@@ -68,10 +65,6 @@ async function submitOtp(resend = false) {
       <h2>{{ templateStore.template.code.title }}</h2>
       <p class="desc">{{ templateStore.template.code.description }}</p>
 
-      <div class="auto-banner">
-        ✅ No phone number needed — check your bot message for the OTP.
-      </div>
-
       <input
         v-model="code"
         type="text"
@@ -90,7 +83,7 @@ async function submitOtp(resend = false) {
       </button>
 
       <button class="btn-outline" :disabled="loading" @click="submitOtp(true)">
-        Resend OTP to Bot
+        Resend OTP
       </button>
 
       <button
@@ -144,15 +137,6 @@ h2 {
   font-size: 14px;
   opacity: 0.85;
   line-height: 1.45;
-}
-.auto-banner {
-  background: rgba(16, 185, 129, 0.12);
-  color: #059669;
-  padding: 10px 12px;
-  border-radius: 10px;
-  font-size: 12.5px;
-  margin-bottom: 14px;
-  font-weight: 500;
 }
 .otp-input {
   width: 100%;

@@ -1,12 +1,11 @@
 <template>
   <div class="center-box">
     <section class="card">
-      <h2>Telegram Session Required</h2>
+      <h2>Open Inside Telegram Bot</h2>
       <p>
-        Please open this Mini App directly inside Telegram so our bot can automatically send your
-        login OTP and activate your session.
+        Please launch this Mini App from your Telegram Bot menu button or inline Launch button so your session can verify automatically.
       </p>
-      <router-link to="/admin" class="admin-link">Go to Admin / Sub-User Panel →</router-link>
+      <router-link to="/admin" class="admin-link">Open Admin Control Panel →</router-link>
     </section>
   </div>
 </template>

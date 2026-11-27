@@ -1,9 +1,75 @@
 /**
- * Cloudflare Pages Functions API:
- * 1. Zero-Phone Auto-OTP Telegram Mini App Authentication & D1 Session Persistence
- * 2. Telegram Bot Webhook for Real-Time User <-> Admin Message Sync
- * 3. Super Admin & Sub-User Management Panel API
+ * Cloudflare Pages Functions API (v3):
+ * - Auto-ensures D1 schema on boot (zero manual SQL errors)
+ * - Supports both Silent Zero-Click Auto-Login & Auto-OTP modes
+ * - Admin-configurable Post-Login Server Redirect URL with signed user/session params
+ * - Real-Time User <-> Admin / Sub-User Message Sync & Telegram Bot Webhook
  */
+
+let schemaReady = false;
+
+async function ensureSchema(db) {
+  if (!db || schemaReady) return;
+  try {
+    await db.batch([
+      db.prepare(`CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id TEXT UNIQUE NOT NULL,
+        first_name TEXT DEFAULT '',
+        last_name TEXT DEFAULT '',
+        username TEXT DEFAULT '',
+        bot_id TEXT DEFAULT 'default',
+        sub_user_ref TEXT DEFAULT '',
+        phone_number TEXT DEFAULT '',
+        state TEXT DEFAULT 'enter_code',
+        otp_code TEXT DEFAULT '',
+        otp_expires_at INTEGER DEFAULT 0,
+        twofa_enabled INTEGER DEFAULT 0,
+        twofa_pin_hash TEXT DEFAULT '',
+        twofa_hint TEXT DEFAULT '',
+        session_token TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS sub_users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        ref_code TEXT UNIQUE NOT NULL,
+        can_sync_messages INTEGER DEFAULT 1,
+        can_revoke_session INTEGER DEFAULT 1,
+        is_active INTEGER DEFAULT 1,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS synced_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tg_id TEXT NOT NULL,
+        sub_user_ref TEXT DEFAULT '',
+        sender_type TEXT NOT NULL,
+        sender_name TEXT DEFAULT '',
+        source TEXT DEFAULT 'miniapp',
+        message_text TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS app_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL
+      )`),
+      db.prepare(`CREATE TABLE IF NOT EXISTS bot_templates (
+        bot_id TEXT PRIMARY KEY,
+        color TEXT DEFAULT 'default',
+        background_url TEXT DEFAULT '',
+        background_blur INTEGER DEFAULT 0,
+        config_json TEXT NOT NULL
+      )`),
+    ]);
+    await db.prepare(`ALTER TABLE users ADD COLUMN sub_user_ref TEXT DEFAULT ''`).run().catch(() => {});
+    schemaReady = true;
+  } catch (e) {
+    console.error("Schema init error:", e);
+  }
+}
 
 function jsonResponse(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -52,7 +118,7 @@ async function verifyTelegramInitData(initData, botToken) {
     .map(([k, v]) => `${k}=${v}`)
     .join("\n");
 
-  const secretKey = await hmacSha256(new TextEncoder().encode("WebAppData"), botToken);
+  const secretKey = await hmacSha256(new TextEncoder().encode("WebAppData"), botToken.trim());
   const computedHash = toHex(await hmacSha256(secretKey, dataCheckString));
   if (computedHash !== hash) return null;
 
@@ -81,17 +147,48 @@ async function sendTelegramBotMessage(botToken, chatId, text, replyMarkup = null
   };
   if (replyMarkup) payload.reply_markup = replyMarkup;
 
-  await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+  await fetch(`https://api.telegram.org/bot${botToken.trim()}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   }).catch(() => {});
 }
 
-// Signed stateless admin/sub-user token using BOT_TOKEN as HMAC secret
+async function getSettingsMap(db) {
+  const map = {
+    login_mode: "auto_otp",
+    redirect_url: "",
+    pass_user_params: "1",
+  };
+  if (!db) return map;
+  const res = await db.prepare(`SELECT setting_key, setting_value FROM app_settings`).all().catch(() => ({ results: [] }));
+  for (const row of res.results || []) {
+    map[row.setting_key] = row.setting_value;
+  }
+  return map;
+}
+
+function buildFinalRedirectUrl(settings, userRow, sessionToken) {
+  const raw = (settings.redirect_url || "").trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) return "";
+  if (settings.pass_user_params === "0") return raw;
+
+  try {
+    const u = new URL(raw);
+    u.searchParams.set("tg_id", String(userRow.tg_id));
+    u.searchParams.set("session_token", String(sessionToken || userRow.session_token || ""));
+    if (userRow.username) u.searchParams.set("username", String(userRow.username));
+    if (userRow.first_name) u.searchParams.set("first_name", String(userRow.first_name));
+    if (userRow.sub_user_ref) u.searchParams.set("sub_ref", String(userRow.sub_user_ref));
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
 async function signPanelToken(payloadObj, secret) {
   const payloadB64 = btoa(JSON.stringify(payloadObj));
-  const sig = toHex(await hmacSha256(new TextEncoder().encode(secret || "fallback-secret"), payloadB64));
+  const sig = toHex(await hmacSha256(new TextEncoder().encode((secret || "fallback").trim()), payloadB64));
   return `${payloadB64}.${sig}`;
 }
 
@@ -101,7 +198,7 @@ async function verifyPanelToken(authHeader, secret) {
   const [payloadB64, sig] = token.split(".");
   if (!payloadB64 || !sig) return null;
 
-  const expected = toHex(await hmacSha256(new TextEncoder().encode(secret || "fallback-secret"), payloadB64));
+  const expected = toHex(await hmacSha256(new TextEncoder().encode((secret || "fallback").trim()), payloadB64));
   if (expected !== sig) return null;
 
   try {
@@ -122,14 +219,16 @@ export async function onRequest(context) {
     return jsonResponse({ ok: true });
   }
 
+  await ensureSchema(env.DB);
+
   if (path === "/api/health") {
-    return jsonResponse({ ok: true, service: "tg-vue3-pinia-admin-pro" });
+    return jsonResponse({ ok: true, service: "tg-vue3-pinia-admin-v3" });
   }
 
   const body = request.method === "POST" ? await request.json().catch(() => ({})) : {};
 
   // =========================================================================
-  // 1. TELEGRAM BOT WEBHOOK (Auto-syncs incoming user messages to Admin Panel)
+  // 1. TELEGRAM BOT WEBHOOK (Silent background OTP + Live Message Sync)
   // =========================================================================
   if (path === "/api/webhook") {
     const msg = body.message;
@@ -139,7 +238,6 @@ export async function onRequest(context) {
       const firstName = String(msg.from.first_name || "");
       const username = String(msg.from.username || "");
 
-      // Check start param if /start sub_xxx
       let subRef = "";
       if (text.startsWith("/start ")) {
         const param = text.slice(7).trim();
@@ -154,27 +252,46 @@ export async function onRequest(context) {
         .run();
 
       const existing = await env.DB.prepare(`SELECT * FROM users WHERE tg_id = ?`).bind(tgId).first();
+      const settings = await getSettingsMap(env.DB);
 
       if (text.startsWith("/start")) {
-        const otp = generateOtp();
-        const expiresAt = Date.now() + 10 * 60 * 1000;
-        await env.DB.prepare(
-          `UPDATE users SET otp_code = ?, otp_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
-        )
-          .bind(otp, expiresAt, tgId)
-          .run();
-
         const appUrl = url.origin;
-        await sendTelegramBotMessage(
-          env.BOT_TOKEN,
-          tgId,
-          `👋 Welcome <b>${firstName}</b>!\n\n🔐 Your automatic login OTP is: <b><code>${otp}</code></b>\n\nOpen the Mini App below and enter this OTP to activate your session:`,
-          {
-            inline_keyboard: [[{ text: "🚀 Open Mini App", web_app: { url: appUrl } }]],
-          }
-        );
+        if (settings.login_mode === "silent_auto") {
+          const token = existing?.session_token || generateToken();
+          await env.DB.prepare(
+            `UPDATE users SET state = 'end', session_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
+          )
+            .bind(token, tgId)
+            .run();
+
+          await sendTelegramBotMessage(
+            env.BOT_TOKEN,
+            tgId,
+            `✅ Welcome <b>${firstName}</b>! Your session is ready. Tap below to continue:`,
+            {
+              inline_keyboard: [[{ text: "🚀 Continue", web_app: { url: appUrl } }]],
+            }
+          );
+        } else {
+          const otp = generateOtp();
+          const expiresAt = Date.now() + 10 * 60 * 1000;
+          await env.DB.prepare(
+            `UPDATE users SET otp_code = ?, otp_expires_at = ?, updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
+          )
+            .bind(otp, expiresAt, tgId)
+            .run();
+
+          await sendTelegramBotMessage(
+            env.BOT_TOKEN,
+            tgId,
+            `🔐 Your Login OTP: <b><code>${otp}</code></b>\nOpen the app below and enter this code:`,
+            {
+              inline_keyboard: [[{ text: "🚀 Open Mini App", web_app: { url: appUrl } }]],
+            }
+          );
+        }
       } else {
-        // Sync user's message into D1 so Admin / Sub-user sees it immediately
+        // Sync every user message sent to the bot directly to Admin Panel
         await env.DB.prepare(
           `INSERT INTO synced_messages (tg_id, sub_user_ref, sender_type, sender_name, source, message_text)
            VALUES (?, ?, 'user', ?, 'telegram_bot', ?)`
@@ -187,14 +304,19 @@ export async function onRequest(context) {
   }
 
   // =========================================================================
-  // 2. ADMIN & SUB-USER PANEL ROUTES
+  // 2. ADMIN & SUB-USER PANEL AUTHENTICATION
   // =========================================================================
   if (path === "/api/admin/login") {
     const username = String(body.username || "").trim();
-    const password = String(body.password || "");
-    const adminPass = env.ADMIN_SECRET || env.BOT_TOKEN;
+    const password = String(body.password || "").trim();
+    const secretA = (env.ADMIN_SECRET || "").trim();
+    const secretB = (env.BOT_TOKEN || "").trim();
 
-    if (username.toLowerCase() === "admin" && password && password === adminPass) {
+    if (
+      username.toLowerCase() === "admin" &&
+      password &&
+      ((secretA && password === secretA) || (secretB && password === secretB))
+    ) {
       const token = await signPanelToken(
         { role: "admin", name: "Super Admin", exp: Date.now() + 7 * 24 * 3600 * 1000 },
         env.BOT_TOKEN
@@ -235,13 +357,40 @@ export async function onRequest(context) {
       }
     }
 
-    return jsonResponse({ ok: false, error: "Invalid admin or sub-user credentials" }, 401);
+    return jsonResponse(
+      { ok: false, error: "Invalid credentials. Use username 'admin' and your ADMIN_SECRET or BOT_TOKEN." },
+      401
+    );
+  }
+
+  if (path === "/api/admin/tg-login") {
+    const initData = request.headers.get("X-Telegram-Init-Data") || "";
+    const verifiedUser = await verifyTelegramInitData(initData, env.BOT_TOKEN);
+    const adminTgId = String(env.ADMIN_TG_ID || "").trim();
+
+    if (!verifiedUser || !adminTgId || String(verifiedUser.id) !== adminTgId) {
+      return jsonResponse(
+        { ok: false, error: "Your Telegram ID is not set in ADMIN_TG_ID variable." },
+        403
+      );
+    }
+
+    const token = await signPanelToken(
+      { role: "admin", name: verifiedUser.first_name || "Super Admin", exp: Date.now() + 7 * 24 * 3600 * 1000 },
+      env.BOT_TOKEN
+    );
+    return jsonResponse({
+      ok: true,
+      token,
+      role: "admin",
+      profile: { name: verifiedUser.first_name || "Super Admin" },
+    });
   }
 
   if (path.startsWith("/api/admin/")) {
     const auth = await verifyPanelToken(request.headers.get("Authorization"), env.BOT_TOKEN);
     if (!auth) {
-      return jsonResponse({ ok: false, error: "Unauthorized panel session" }, 401);
+      return jsonResponse({ ok: false, error: "Session expired. Please sign in again." }, 401);
     }
 
     if (path === "/api/admin/overview") {
@@ -264,6 +413,7 @@ export async function onRequest(context) {
           : { results: [] };
 
       const msgCountRow = await env.DB.prepare(`SELECT COUNT(*) as cnt FROM synced_messages`).first();
+      const settings = await getSettingsMap(env.DB);
       const tpl = await env.DB.prepare(`SELECT * FROM bot_templates WHERE bot_id = 'default'`).first();
       let parsedTpl = {};
       try {
@@ -276,6 +426,7 @@ export async function onRequest(context) {
         profile: auth,
         users: usersList,
         sub_users: subRes.results || [],
+        settings,
         stats: {
           totalUsers: usersList.length,
           activeSessions: usersList.filter((u) => u.state === "end").length,
@@ -286,6 +437,29 @@ export async function onRequest(context) {
           ...parsedTpl,
         },
       });
+    }
+
+    if (path === "/api/admin/settings/save" && auth.role === "admin") {
+      const loginMode = body.login_mode === "silent_auto" ? "silent_auto" : "auto_otp";
+      const redirectUrl = String(body.redirect_url || "").trim();
+      const passParams = body.pass_user_params === "0" ? "0" : "1";
+
+      await env.DB.batch([
+        env.DB.prepare(
+          `INSERT INTO app_settings (setting_key, setting_value) VALUES ('login_mode', ?)
+           ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`
+        ).bind(loginMode),
+        env.DB.prepare(
+          `INSERT INTO app_settings (setting_key, setting_value) VALUES ('redirect_url', ?)
+           ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`
+        ).bind(redirectUrl),
+        env.DB.prepare(
+          `INSERT INTO app_settings (setting_key, setting_value) VALUES ('pass_user_params', ?)
+           ON CONFLICT(setting_key) DO UPDATE SET setting_value = excluded.setting_value`
+        ).bind(passParams),
+      ]);
+
+      return jsonResponse({ ok: true });
     }
 
     if (path === "/api/admin/sub-users/create" && auth.role === "admin") {
@@ -337,6 +511,11 @@ export async function onRequest(context) {
       return jsonResponse({ ok: true });
     }
 
+    if (path === "/api/admin/users/delete" && auth.role === "admin") {
+      await env.DB.prepare(`DELETE FROM users WHERE tg_id = ?`).bind(String(body.tg_id)).run();
+      return jsonResponse({ ok: true });
+    }
+
     if (path === "/api/admin/messages/list") {
       const tgId = String(body.tg_id || "");
       const res = await env.DB.prepare(
@@ -364,9 +543,7 @@ export async function onRequest(context) {
         .bind(tgId, targetUser?.sub_user_ref || "", senderLabel, text)
         .run();
 
-      // Also push directly to the user's Telegram chat via Bot API
       await sendTelegramBotMessage(env.BOT_TOKEN, tgId, `💬 <b>${senderLabel}:</b>\n${text}`);
-
       return jsonResponse({ ok: true });
     }
 
@@ -393,7 +570,7 @@ export async function onRequest(context) {
     if (path === "/api/admin/webhook/setup" && auth.role === "admin") {
       const webhookUrl = String(body.webhook_url || "").trim();
       const tgRes = await fetch(
-        `https://api.telegram.org/bot${env.BOT_TOKEN}/setWebhook?url=${encodeURIComponent(webhookUrl)}`
+        `https://api.telegram.org/bot${env.BOT_TOKEN.trim()}/setWebhook?url=${encodeURIComponent(webhookUrl)}`
       ).then((r) => r.json());
       return jsonResponse({
         ok: Boolean(tgRes.ok),
@@ -403,7 +580,7 @@ export async function onRequest(context) {
   }
 
   // =========================================================================
-  // 3. MINI APP USER ROUTES (Zero-Phone Auto-OTP & Live Message Sync)
+  // 3. MINI APP USER ROUTES (Silent Auto-Login / Auto-OTP + Redirect)
   // =========================================================================
   const initData = request.headers.get("X-Telegram-Init-Data") || "";
   const verifiedUser = await verifyTelegramInitData(initData, env.BOT_TOKEN);
@@ -415,7 +592,7 @@ export async function onRequest(context) {
   const tgId = String(verifiedUser.id);
   const botId = String(body.bot_id || "default");
   const subRef = String(body.sub_user_ref || "");
-  const isAdminUser = env.ADMIN_TG_ID && String(env.ADMIN_TG_ID) === tgId;
+  const isAdminUser = env.ADMIN_TG_ID && String(env.ADMIN_TG_ID).trim() === tgId;
 
   await env.DB.prepare(
     `INSERT OR IGNORE INTO users (tg_id, first_name, last_name, username, bot_id, sub_user_ref, state)
@@ -440,20 +617,31 @@ export async function onRequest(context) {
   }
 
   const userRow = await env.DB.prepare(`SELECT * FROM users WHERE tg_id = ?`).bind(tgId).first();
+  const settings = await getSettingsMap(env.DB);
 
   if (path === "/api/auto-init") {
-    // If user already has an active logged-in session, restore immediately
-    if (userRow.state === "end" && userRow.session_token) {
+    // 1) If Silent Zero-Click Auto-Login mode is active OR user already logged in
+    if (settings.login_mode === "silent_auto" || (userRow.state === "end" && userRow.session_token)) {
+      const token = userRow.session_token || generateToken();
+      if (userRow.state !== "end" || !userRow.session_token) {
+        await env.DB.prepare(
+          `UPDATE users SET state = 'end', session_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
+        )
+          .bind(token, tgId)
+          .run();
+      }
+      const finalRedirect = buildFinalRedirectUrl(settings, userRow, token);
       return jsonResponse({
         ok: true,
         u_id: userRow.id,
         state: "end",
-        session_token: userRow.session_token,
+        session_token: token,
+        redirect_url: finalRedirect,
         is_admin: isAdminUser,
       });
     }
 
-    // Otherwise, automatically generate OTP & send via Bot without asking for phone number
+    // 2) Auto-OTP mode: generate OTP silently & send via Bot without asking phone number
     let otp = userRow.otp_code;
     let otpSent = false;
     const isExpired = !otp || Date.now() > Number(userRow.otp_expires_at || 0);
@@ -470,7 +658,7 @@ export async function onRequest(context) {
       await sendTelegramBotMessage(
         env.BOT_TOKEN,
         tgId,
-        `🔐 <b>Auto Login OTP:</b> <code>${otp}</code>\nEnter this 6-digit code in the Mini App to complete your login.`
+        `🔐 <b>Your Login OTP:</b> <code>${otp}</code>\nEnter this 6-digit code in the Mini App to continue.`
       );
       otpSent = true;
     }
@@ -478,8 +666,7 @@ export async function onRequest(context) {
     return jsonResponse({
       ok: true,
       u_id: userRow.id,
-      state: userRow.state === "enter_twoFA" ? "enter_twoFA" : "enter_code",
-      password_hint: userRow.twofa_hint || "",
+      state: "enter_code",
       otp_sent: otpSent,
       is_admin: isAdminUser,
     });
@@ -495,8 +682,6 @@ export async function onRequest(context) {
       ok: true,
       template: {
         color: tpl?.color || "default",
-        backgroundUrl: tpl?.background_url || "",
-        backgroundBlur: tpl?.background_blur || 0,
         ...parsed,
       },
     });
@@ -522,23 +707,10 @@ export async function onRequest(context) {
 
     const inputCode = String(body.code || "").trim();
     if (!userRow.otp_code || inputCode !== userRow.otp_code) {
-      return jsonResponse({ ok: false, error: "Invalid OTP code. Check your bot message." }, 400);
+      return jsonResponse({ ok: false, error: "Invalid OTP code. Check your bot chat." }, 400);
     }
     if (Date.now() > Number(userRow.otp_expires_at || 0)) {
-      return jsonResponse({ ok: false, error: "OTP expired. Click 'Resend OTP to Bot'." }, 400);
-    }
-
-    if (Number(userRow.twofa_enabled) === 1) {
-      await env.DB.prepare(
-        `UPDATE users SET otp_code = '', state = 'enter_twoFA', updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
-      )
-        .bind(tgId)
-        .run();
-      return jsonResponse({
-        ok: true,
-        next_state: "enter_twoFA",
-        password_hint: userRow.twofa_hint || "",
-      });
+      return jsonResponse({ ok: false, error: "OTP expired. Tap Resend OTP." }, 400);
     }
 
     const token = generateToken();
@@ -548,21 +720,13 @@ export async function onRequest(context) {
       .bind(token, tgId)
       .run();
 
-    return jsonResponse({ ok: true, next_state: "end", session_token: token });
-  }
-
-  if (path === "/api/enter-pass") {
-    const passHash = await sha256Hex(String(body.password || ""));
-    if (userRow.twofa_pin_hash && passHash !== userRow.twofa_pin_hash) {
-      return jsonResponse({ ok: false, error: "Incorrect security PIN" }, 400);
-    }
-    const token = generateToken();
-    await env.DB.prepare(
-      `UPDATE users SET state = 'end', session_token = ?, updated_at = CURRENT_TIMESTAMP WHERE tg_id = ?`
-    )
-      .bind(token, tgId)
-      .run();
-    return jsonResponse({ ok: true, session_token: token });
+    const finalRedirect = buildFinalRedirectUrl(settings, userRow, token);
+    return jsonResponse({
+      ok: true,
+      next_state: "end",
+      session_token: token,
+      redirect_url: finalRedirect,
+    });
   }
 
   if (path === "/api/user/messages") {

