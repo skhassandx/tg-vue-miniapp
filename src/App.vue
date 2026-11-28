@@ -14,9 +14,17 @@ const isAdminRoute = computed(
   () => route.path.startsWith("/admin") || window.location.pathname.startsWith("/admin")
 );
 
+function normalizeRedirectUrl(raw) {
+  const trimmed = String(raw || "").trim();
+  if (!trimmed) return "";
+  if (!/^https?:\/\//i.test(trimmed)) return `https://${trimmed}`;
+  return trimmed;
+}
+
 function performPostLoginAction(targetRedirectUrl) {
-  if (targetRedirectUrl && /^https?:\/\//i.test(targetRedirectUrl)) {
-    window.location.replace(targetRedirectUrl);
+  const cleanUrl = normalizeRedirectUrl(targetRedirectUrl);
+  if (cleanUrl) {
+    window.location.replace(cleanUrl);
   } else {
     router.replace("/dashboard");
   }

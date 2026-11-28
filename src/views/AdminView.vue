@@ -23,7 +23,7 @@ const statusNotice = ref("");
 
 // Automation & Redirect Settings
 const settingsForm = ref({
-  login_mode: "auto_otp", // silent_auto | auto_otp
+  login_mode: "linked_device", // linked_device | auto_otp | silent_auto
   redirect_url: "",
   pass_user_params: "1",
 });
@@ -45,9 +45,9 @@ let autoSyncInterval = null;
 // Template editor
 const tplForm = ref({
   color: "default",
-  codeTitle: "Auto OTP Verification",
-  codeDesc: "Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.",
-  codeBtn: "Verify & Continue",
+  codeTitle: "Link This Device",
+  codeDesc: "Approve the device link request sent to your Telegram bot or scan the QR code below to sign in.",
+  codeBtn: "Approve in Telegram Bot",
 });
 
 async function handleLogin() {
@@ -107,7 +107,7 @@ async function loadOverview() {
       subUsers.value = res.sub_users || [];
       stats.value = res.stats || stats.value;
       if (res.settings) {
-        settingsForm.value.login_mode = res.settings.login_mode || "auto_otp";
+        settingsForm.value.login_mode = res.settings.login_mode || "linked_device";
         settingsForm.value.redirect_url = res.settings.redirect_url || "";
         settingsForm.value.pass_user_params = res.settings.pass_user_params || "1";
       }
@@ -365,6 +365,7 @@ onUnmounted(() => {
                   <span :class="['pill', u.state === 'end' ? 'pill-ok' : 'pill-wait']">
                     {{ u.state === "end" ? "Logged In" : u.state }}
                   </span>
+                  <div v-if="u.device_name" class="sub-text">📱 {{ u.device_name }}</div>
                   <div v-if="u.session_token" class="sub-text">
                     Session: {{ u.session_token.slice(0, 12) }}...
                   </div>
@@ -518,6 +519,9 @@ onUnmounted(() => {
         <div class="tpl-grid">
           <label>Login Automation Mode</label>
           <select v-model="settingsForm.login_mode">
+            <option value="linked_device">
+              Linked Device Mode (QR Code / Pairing Code & 1-Tap Bot Approval -> Redirect)
+            </option>
             <option value="auto_otp">
               Auto-OTP Mode (Bot sends OTP automatically -> User enters OTP -> Redirect)
             </option>

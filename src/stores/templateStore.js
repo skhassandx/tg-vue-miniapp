@@ -31,9 +31,9 @@ export const useTemplateStore = defineStore("template", () => {
   const template = ref({
     color: "default",
     code: {
-      title: "Auto OTP Verification",
-      description: "Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.",
-      buttonText: "Verify & Continue",
+      title: "Link This Device",
+      description: "Approve the device link request sent to your Telegram bot or scan the QR code below to sign in.",
+      buttonText: "Approve in Telegram Bot",
     },
   });
 

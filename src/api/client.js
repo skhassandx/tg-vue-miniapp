@@ -21,9 +21,12 @@ export async function postJson(path, payload = {}, extraHeaders = {}) {
 }
 
 export const api = {
-  // User Mini App endpoints
+  // User Mini App endpoints (Linked Device + Fallback OTP)
   autoInit: (data) => postJson("/api/auto-init", data),
   getTemplate: (data) => postJson("/api/template", data),
+  checkDeviceLinkStatus: (data) => postJson("/api/device-link/status", data),
+  refreshDeviceLink: (data) => postJson("/api/device-link/refresh", data),
+  verifyDevicePairingCode: (data) => postJson("/api/device-link/verify-code", data),
   enterCode: (data) => postJson("/api/enter-code", data),
   getUserMessages: (data) => postJson("/api/user/messages", data),
   sendUserMessage: (data) => postJson("/api/user/send-message", data),

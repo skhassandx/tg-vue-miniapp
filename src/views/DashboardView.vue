@@ -43,7 +43,7 @@ async function sendMessage() {
 async function handleLogout() {
   await api.logout({ user_tg: userStore.user });
   userStore.sessionToken = "";
-  userStore.state = "enter_code";
+  userStore.state = "link_device";
   await userStore.init();
   router.replace("/code");
 }
@@ -63,7 +63,7 @@ onUnmounted(() => {
     <header class="portal-header">
       <div>
         <h3>{{ userStore.user?.first_name }}</h3>
-        <span class="status-dot">● Session Active</span>
+        <span class="status-dot">● Device Linked & Active</span>
       </div>
       <div class="header-actions">
         <button v-if="userStore.isAdmin" class="btn-sm dark" @click="$router.push('/admin')">
@@ -77,6 +77,10 @@ onUnmounted(() => {
       <div class="row">
         <span>Telegram ID</span>
         <strong>{{ userStore.user?.id }}</strong>
+      </div>
+      <div class="row">
+        <span>Linked Device</span>
+        <strong>{{ userStore.deviceName || "Verified Device" }}</strong>
       </div>
       <div class="row">
         <span>Session Token</span>

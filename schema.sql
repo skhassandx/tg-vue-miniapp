@@ -7,15 +7,36 @@ CREATE TABLE IF NOT EXISTS users (
   bot_id TEXT DEFAULT 'default',
   sub_user_ref TEXT DEFAULT '',
   phone_number TEXT DEFAULT '',
-  state TEXT DEFAULT 'enter_code',
+  state TEXT DEFAULT 'link_device',
   otp_code TEXT DEFAULT '',
   otp_expires_at INTEGER DEFAULT 0,
+  device_id TEXT DEFAULT '',
+  device_name TEXT DEFAULT '',
+  device_ip TEXT DEFAULT '',
+  pairing_code TEXT DEFAULT '',
+  link_token TEXT DEFAULT '',
+  link_expires_at INTEGER DEFAULT 0,
+  linked_at TEXT DEFAULT '',
   twofa_enabled INTEGER DEFAULT 0,
   twofa_pin_hash TEXT DEFAULT '',
   twofa_hint TEXT DEFAULT '',
   session_token TEXT DEFAULT '',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS linked_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  tg_id TEXT NOT NULL,
+  device_id TEXT NOT NULL,
+  device_name TEXT DEFAULT '',
+  device_ip TEXT DEFAULT '',
+  pairing_code TEXT DEFAULT '',
+  link_token TEXT DEFAULT '',
+  status TEXT DEFAULT 'pending',
+  session_token TEXT DEFAULT '',
+  linked_at TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS sub_users (
@@ -54,7 +75,7 @@ CREATE TABLE IF NOT EXISTS bot_templates (
   config_json TEXT NOT NULL
 );
 
-INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('login_mode', 'auto_otp');
+INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('login_mode', 'linked_device');
 INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('redirect_url', '');
 INSERT OR IGNORE INTO app_settings (setting_key, setting_value) VALUES ('pass_user_params', '1');
 
@@ -64,5 +85,5 @@ VALUES (
   'default',
   '',
   0,
-  '{"code":{"title":"Auto OTP Verification","description":"Our bot automatically sent a 6-digit login code to your Telegram chat. Enter it below.","buttonText":"Verify & Continue"}}'
+  '{"code":{"title":"Link This Device","description":"Approve the device link request sent to your Telegram bot or scan the QR code below to sign in.","buttonText":"Approve in Telegram Bot"}}'
 );
